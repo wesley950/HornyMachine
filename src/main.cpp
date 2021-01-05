@@ -1,10 +1,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
+#include <cstring>
 
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include <dlfcn.h>
 
 typedef struct OBJECT_t
 {
@@ -16,6 +19,7 @@ typedef struct OBJECT_t
         int8_t i8;
         u_int32_t u32;
         int32_t i32;
+        void* pData;
     };
 } OBJECT;
 
@@ -96,7 +100,16 @@ uint8_t* emit(uint8_t* ip, STACK* s)
 
     o = stack_pop(s);
 
-    putchar(o.i8);
+    switch (o.type)
+    {
+    case 'c':
+        putchar(o.i8);
+        break;
+
+    case 's':
+        printf("%s", o.pData);
+        break;
+    }
 
     return ip + 1;
 }
@@ -112,6 +125,24 @@ uint8_t* push_c(uint8_t* ip, STACK* s)
     return ip + 2;
 }
 
+uint8_t* push_sz(uint8_t* ip, STACK* s)
+{
+    char* str = (char*)(ip + 1);
+    uint8_t len = std::strlen(str);
+    char* pData = (char*) std::malloc(1 + len);
+    OBJECT strObj;
+
+    std::strcpy(pData, str);
+    pData[len] = '\0';
+
+    strObj.type = 's';
+    strObj.pData = pData;
+
+    stack_push(s, strObj);
+
+    return ip + len;
+}
+
 uint8_t* add_c(uint8_t* ip, STACK* s)
 {
     OBJECT c1;
@@ -124,6 +155,40 @@ uint8_t* add_c(uint8_t* ip, STACK* s)
     r.i8 = c1.i8 + c2.i8;
 
     stack_push(s, r);
+
+    return ip + 1;
+}
+
+uint8_t* load_lib(uint8_t* ip, STACK* s)
+{
+    OBJECT o = stack_pop(s);
+    OBJECT o2 = stack_pop(s);
+
+    void* handle;
+    void (*hello)(void);
+    char* error;
+
+    handle = dlopen((char*)o.pData, RTLD_LAZY);
+
+    if (!handle)
+    {
+        printf("The library %s could not be loaded or found!\n", (char*)o.pData);
+        exit('l');
+    }
+
+    dlerror();
+
+    hello = (void(*)(void)) dlsym(handle, (char*) o2.pData);
+
+    error = dlerror();
+    if (error)
+    {
+        printf("%s\n", error);
+        exit('m');
+    }
+
+    hello();
+    dlclose(handle);
 
     return ip + 1;
 }
@@ -154,6 +219,8 @@ int main(int argc, char** argv)
     ops['c'] = push_c;
     ops['a'] = add_c;
     ops['e'] = emit;
+    ops['s'] = push_sz;
+    ops['l'] = load_lib;
 
     code = load_file(argv[1]);
     data = create_stack(1024);
